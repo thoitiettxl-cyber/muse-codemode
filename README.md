@@ -63,6 +63,9 @@ Exit codes: `0` ok, `1` script error, `2` timeout, `3` aborted,
 All filesystem paths are validated to stay under `$HOME`. Run
 `codemode --declarations` for the exact current signatures.
 
+> Note: the `mcp` tool shells out to `~/.local/bin/mcp`. On machines without
+> that CLI the `mcp` tool fails, while `read`/`write`/`exec` work standalone.
+
 ## Smoke test
 
 ```bash
