@@ -4,8 +4,37 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { McpSessionManager } from "./mcp-sessions.mjs";
+
 export const HOME = os.homedir();
-const MCP_BIN = path.join(HOME, ".local", "bin", "mcp");
+
+let _piMcp = null;
+async function piMcp() {
+  if (!_piMcp) _piMcp = await import("@earendil-works/pi-mcp");
+  return _piMcp;
+}
+
+/** Process-wide fallback session manager (used when the caller doesn't pass one). */
+let _defaultSessions = null;
+function defaultSessions() {
+  if (!_defaultSessions) _defaultSessions = new McpSessionManager();
+  return _defaultSessions;
+}
+
+/** Compact text of an MCP CallToolResult (for error messages). */
+async function resultText(result) {
+  const { toLlmContent } = await piMcp();
+  return toLlmContent(result)
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+}
+
+/** Combine an abort signal with a per-call timeout. */
+function timeoutSignal(signal, ms) {
+  const t = AbortSignal.timeout(ms);
+  return signal ? AbortSignal.any([signal, t]) : t;
+}
 
 /** Resolve p against $HOME and reject anything escaping it. */
 export function resolveUnderHome(p, what = "path") {
@@ -215,46 +244,47 @@ const execTool = {
   },
 };
 
-const mcpTool = {
-  name: "mcp",
-  description:
-    "Call a tool on a registered MCP server via the system `mcp` CLI (servers: openai-docs, xai-docs, anthropic-docs, cloudflare, context7, exa, ksht, firecrawl, inspo). Returns the tool result as compact LLM text (--llm).",
-  inputSchema: {
-    type: "object",
-    properties: {
-      server: { type: "string", description: "MCP server name from the registry" },
-      name: { type: "string", description: "Tool name on that server" },
-      args: { type: "object", description: "Tool arguments", default: {} },
-      timeoutMs: { type: "integer", minimum: 1000, maximum: 120000, default: 60000 },
+function makeMcpTool(sessions) {
+  return {
+    name: "mcp",
+    description:
+      "Call a tool on a registered MCP server over a PERSISTENT session: the server is connected once per codemode run and the same session is reused for every call, so multi-step workflows keep server-side state (e.g. retained evidence). Servers: openai-docs, xai-docs, anthropic-docs, cloudflare, context7, exa, ksht, firecrawl, inspo, rea. Returns the tool result as compact LLM JSON text.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server: { type: "string", description: "MCP server name from the registry" },
+        name: { type: "string", description: "Tool name on that server" },
+        args: { type: "object", description: "Tool arguments", default: {} },
+        timeoutMs: { type: "integer", minimum: 1000, maximum: 120000, default: 60000 },
+      },
+      required: ["server", "name"],
+      additionalProperties: false,
     },
-    required: ["server", "name"],
-    additionalProperties: false,
-  },
-  outputSchema: { type: "string" },
-  execute: async (rawArgs, { signal } = {}) => {
-    const args = rawArgs ?? {};
-    const server = strArg(args.server, "server");
-    const name = strArg(args.name, "name");
-    for (const [k, v] of [["server", server], ["name", name]]) {
-      if (!/^[A-Za-z0-9_.-]+$/.test(v)) throw new Error(`${k} contains invalid characters: ${v}`);
-    }
-    const toolArgs = args.args ?? {};
-    if (typeof toolArgs !== "object" || toolArgs === null || Array.isArray(toolArgs)) {
-      throw new Error("args must be an object");
-    }
-    const timeoutMs = intArg(args.timeoutMs, "timeoutMs", { min: 1000, max: 120000, def: 60000 });
-    const res = await spawnWithTimeout(
-      MCP_BIN,
-      ["call-tool", "--server", server, "--name", name, "--args-json", JSON.stringify(toolArgs), "--llm"],
-      { cwd: HOME, timeoutMs, shell: false, maxOutputBytes: 2 * 1024 * 1024, signal },
-    );
-    if (res.exitCode !== 0) {
-      throw new Error(`mcp call-tool failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
-    }
-    return res.stdout;
-  },
-};
+    outputSchema: { type: "string" },
+    execute: async (rawArgs, { signal } = {}) => {
+      const args = rawArgs ?? {};
+      const server = strArg(args.server, "server");
+      const name = strArg(args.name, "name");
+      for (const [k, v] of [["server", server], ["name", name]]) {
+        if (!/^[A-Za-z0-9_.-]+$/.test(v)) throw new Error(`${k} contains invalid characters: ${v}`);
+      }
+      const toolArgs = args.args ?? {};
+      if (typeof toolArgs !== "object" || toolArgs === null || Array.isArray(toolArgs)) {
+        throw new Error("args must be an object");
+      }
+      const timeoutMs = intArg(args.timeoutMs, "timeoutMs", { min: 1000, max: 120000, def: 60000 });
+      const client = await sessions.getClient(server, { signal });
+      const { toLlmContent } = await piMcp();
+      const result = await client.callTool(name, toolArgs, { signal: timeoutSignal(signal, timeoutMs) });
+      // MCP reports tool failures in the result instead of as a protocol error.
+      if (result.isError === true) {
+        throw new Error((await resultText(result)) || `MCP tool ${name} failed`);
+      }
+      return JSON.stringify(toLlmContent(result));
+    },
+  };
+}
 
-export function createTools() {
-  return [readTool, writeTool, execTool, mcpTool];
+export function createTools({ mcpSessions } = {}) {
+  return [readTool, writeTool, execTool, makeMcpTool(mcpSessions ?? defaultSessions())];
 }

@@ -6,6 +6,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createTools } from "./tools.mjs";
+import { McpSessionManager } from "./mcp-sessions.mjs";
 
 export { CodemodeSourceError };
 export const TOOLS = createTools();
@@ -78,8 +79,11 @@ export async function runScript(source, { timeoutMs, store: useStore = true, sig
     throw new Error(`timeout must be within [1, ${MAX_TIMEOUT_MS}] ms`);
   }
   const store = useStore ? await loadStore() : {};
+  // One MCP session manager per run: each server connects once, and every
+  // tools.mcp call reuses that session (server-side state survives across calls).
+  const mcpSessions = new McpSessionManager();
   const sandbox = new CodemodeSandbox({
-    tools: TOOLS,
+    tools: createTools({ mcpSessions }),
     timeoutMs: deadline,
     memoryLimitBytes: MEMORY_LIMIT_BYTES,
   });
@@ -93,8 +97,15 @@ export async function runScript(source, { timeoutMs, store: useStore = true, sig
       }
     }
     const { output, truncated } = applyOutputBudget(raw.output, options.maxOutputTokens);
-    return { result: { ...raw, output }, options, truncated, storePath: useStore ? STORE_PATH : null };
+    return {
+      result: { ...raw, output },
+      options,
+      truncated,
+      storePath: useStore ? STORE_PATH : null,
+      mcp: mcpSessions.stats(),
+    };
   } finally {
     await sandbox.close();
+    await mcpSessions.closeAll();
   }
 }

@@ -58,13 +58,14 @@ Exit codes: `0` ok, `1` script error, `2` timeout, `3` aborted,
 | `read({path, encoding?, maxBytes?})` | Read a file under `$HOME` (relative paths resolve against `$HOME`) |
 | `write({path, content, encoding?})` | Write a file under `$HOME`, creating parent dirs |
 | `exec({command, args?, cwd?, timeoutMs?, shell?, maxOutputBytes?})` | Run a command; **always has a timeout** (default 30s, max 120s) — a hanging command is SIGKILLed and reported as an error. `cwd` defaults to `$HOME` and must stay under it. `shell:true` for pipes/globs via bash |
-| `mcp({server, name, args?, timeoutMs?})` | Call a tool on a registered MCP server via the `mcp` CLI |
+| `mcp({server, name, args?, timeoutMs?})` | Call a tool on a registered MCP server over a **persistent session** (one connect per run, reused across calls — server-side state survives multi-step workflows) |
 
 All filesystem paths are validated to stay under `$HOME`. Run
 `codemode --declarations` for the exact current signatures.
 
-> Note: the `mcp` tool shells out to `~/.local/bin/mcp`. On machines without
-> that CLI the `mcp` tool fails, while `read`/`write`/`exec` work standalone.
+> Note: the `mcp` tool connects directly with `@earendil-works/pi-mcp` using the
+> registry at `~/.config/mcp/servers.json`. On machines without that registry the
+> `mcp` tool fails, while `read`/`write`/`exec` work standalone.
 
 ## Smoke test
 

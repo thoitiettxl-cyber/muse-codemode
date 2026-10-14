@@ -130,7 +130,7 @@ async function main() {
 
   const { result } = ran;
   if (opts.json) {
-    process.stdout.write(JSON.stringify(result) + "\n");
+    process.stdout.write(JSON.stringify({ ...result, mcp: ran.mcp }) + "\n");
   } else {
     printHuman(result);
   }
