@@ -15,6 +15,10 @@ const REGISTRY_PATH = resolve(CONFIG_DIR, "servers.json");
 const TOKENS_PATH = resolve(CONFIG_DIR, "tokens.json");
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 45000;
+// Client-level request timeout must not be stricter than the per-call
+// timeoutMs (max 120000, enforced via AbortSignal in tools.mjs); otherwise
+// the connect timeout would silently cap every tool call at 45s.
+const MAX_REQUEST_TIMEOUT_MS = 120000;
 
 let _piMcp = null;
 async function piMcp() {
@@ -144,7 +148,7 @@ export class McpSessionManager {
     const client = new McpClient({
       name: "muse-codemode",
       version: "1.0.0",
-      requestTimeoutMs: this.connectTimeoutMs,
+      requestTimeoutMs: MAX_REQUEST_TIMEOUT_MS,
     });
     const transport = await buildTransport(entry, serverName);
     try {
